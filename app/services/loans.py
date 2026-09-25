@@ -2,10 +2,13 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Loan, MemberTier
+from app.models import Book, Loan, Member, MemberTier
 from app.schemas import LoanCreate, LoanOut, LoanStatus
+from app.services.members import ensure_can_access_restricted
 
 # Maximum concurrent unreturned loans per tier (None = unlimited).
 TIER_LOAN_LIMIT: Dict[str, Optional[int]] = {
@@ -65,7 +68,83 @@ def create_loan(db: Session, data: LoanCreate, now: datetime) -> LoanOut:
     On success: borrowed_at = now, due_at = now + 14 days, returned_at None,
     late_fee_cents 0, and stock is decremented by one.
     """
-    raise NotImplementedError("create_loan")
+    member = db.get(Member, data.member_id)
+
+    if member is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found",
+        )
+
+    book = db.get(Book, data.book_id)
+
+    if book is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Book not found",
+        )
+
+    if book.restricted:
+        ensure_can_access_restricted(member)
+
+    active_loans = db.scalars(
+        select(Loan).where(
+            Loan.member_id == member.id,
+            Loan.returned_at.is_(None),
+        )
+    ).all()
+
+    for loan in active_loans:
+        if now > loan.due_at:
+            raise HTTPException(
+                status_code=409,
+                detail="Member has an overdue loan",
+            )
+
+    existing_loan = db.scalar(
+        select(Loan).where(
+            Loan.member_id == member.id,
+            Loan.book_id == book.id,
+            Loan.returned_at.is_(None),
+        )
+    )
+
+    if existing_loan is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Member already has an unreturned loan for this book",
+        )
+
+    loan_limit = TIER_LOAN_LIMIT[member.tier]
+
+    if loan_limit is not None and len(active_loans) >= loan_limit:
+        raise HTTPException(
+            status_code=409,
+            detail="Member has reached their loan limit",
+        )
+
+    if book.stock <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Book is out of stock",
+        )
+
+    book.stock -= 1
+
+    loan = Loan(
+        member_id=member.id,
+        book_id=book.id,
+        borrowed_at=now,
+        due_at=now + LOAN_PERIOD,
+        returned_at=None,
+        late_fee_cents=0,
+    )
+
+    db.add(loan)
+    db.commit()
+    db.refresh(loan)
+
+    return to_loan_out(loan, now)
 
 
 def get_loan(db: Session, loan_id: int, now: datetime) -> LoanOut:
