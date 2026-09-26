@@ -532,8 +532,18 @@ function bookRowHTML(b) {
 
   if (editing) {
     return `<tr data-book-id="${b.id}" class="editing">
-      <td>${titleCell}</td>
-      <td>${esc(b.author)}</td>
+      <td>
+      <div class="book-cell">
+        <label class="sr-only" for="edit-title-${b.id}">Title</label>
+        <input class="edit-input" id="edit-title-${b.id}" name="title" type="text" value="${esc(b.title)}"> ${restrictedBadge}
+      </div>
+      </td>
+
+      <td>
+        <label class="sr-only" for="edit-author-${b.id}">Author</label>
+        <input class="edit-input" id="edit-author-${b.id}" name="author" type="text" value="${esc(b.author)}">
+      </td>
+
       <td class="mono">${esc(b.isbn)}</td>
       <td class="num">
         <label class="sr-only" for="edit-price-${b.id}">Price in USD for ${esc(b.title)}</label>
@@ -696,7 +706,7 @@ function initCatalog() {
 function startBookEdit(id) {
   state.editingBookId = id;
   renderCatalog();
-  $(`#edit-price-${id}`)?.focus();
+  $(`#edit-title-${id}`)?.focus();
 }
 
 function cancelBookEdit() {
@@ -711,14 +721,20 @@ async function saveBookEdit(id) {
   const book = state.books.get(id);
   if (!row || !book) return;
   clearFormErrors(row);
+  const titleInput = row.querySelector('[name="title"]');
+  const authorInput = row.querySelector('[name="author"]');
   const priceInput = row.querySelector('[name="price_cents"]');
   const stockInput = row.querySelector('[name="stock"]');
+  const title = titleInput.value.trim();
+  const author = authorInput.value.trim();
   const price = parseDollars(priceInput.value);
   const stock = parseIntStrict(stockInput.value);
   if (price === null || price === undefined) { showFieldError(priceInput, 'e.g. 12.99'); priceInput.focus(); return; }
   if (stock === null || stock === undefined) { showFieldError(stockInput, 'Whole number'); stockInput.focus(); return; }
 
   const patch = {};
+  if (title !== book.title) patch.title = title;
+  if (author !== book.author) patch.author = author;
   if (price !== book.price_cents) patch.price_cents = price;
   if (stock !== book.stock) patch.stock = stock;
   if (!Object.keys(patch).length) { cancelBookEdit(); return; }
